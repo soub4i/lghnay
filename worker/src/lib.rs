@@ -1,0 +1,228 @@
+use worker::*;
+use serde::{Deserialize, Serialize};
+use std::fmt;
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+struct Message {
+    id: Option<u32>, 
+    sender: String,
+    sms: String,
+    ts: String, 
+}
+
+impl fmt::Display for Message {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Sender: {} ({}); Message: {};", self.sender, self.ts, self.sms)
+    }
+}
+
+#[derive(Serialize)]
+struct ResendEmailPayload {
+    from: String,
+    to: Vec<String>,
+    subject: String,
+    html: String,
+}
+
+#[event(fetch)]
+async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
+    let api_key = env.secret("AUTH_KEY")?.to_string();
+    let authorization = req.headers().get("Authorization")?;
+    let  headers = Headers::new();
+    if authorization == None {
+         headers.set(
+                    "WWW-Authenticate",
+                    "Basic realm='lghnay', charset='UTF-8'",
+        )?;
+        return Ok(Response::error("You need to login.", 401)?.with_headers(headers));
+    }
+        let authorization = authorization.unwrap();
+        let auth: Vec<&str> = authorization.split(" ").collect();
+        let scheme = auth[0];
+        let encoded = auth[1];  
+        if encoded == "" || scheme != "Cisab" {
+                return Response::error("Malformed authorization header.", 400);
+        }
+
+        if encoded.chars().rev().collect::<String>() != api_key{
+                headers.set(
+                            "WWW-Authenticate",
+                            "Basic realm='lghnay', charset='UTF-8'",
+                )?;
+        return Ok(Response::error("You need to login.", 401)?.with_headers(headers));
+        }
+
+
+    Router::new()
+        .get("/health", |_, _| Response::ok("yo"))
+        .get_async("/get", |_, ctx| async move {
+            handle_get_all(ctx).await
+        })
+        .get_async("/get/:id", |_, ctx| async move {
+            handle_get_by_id(ctx).await
+        })
+        .post_async("/set", |req, ctx| async move {
+            handle_set_message(req, ctx).await
+        })
+        .run(req, env)
+        .await
+}
+
+async fn handle_get_all(ctx: RouteContext<()>) -> Result<Response> {
+    let d1 = ctx.env.d1("DB")?;
+
+    let statement = d1.prepare("SELECT * FROM messages ORDER BY id DESC");
+    
+    match statement.all().await {
+        Ok(results) => {
+            console_debug!("Raw D1 Result: {:?}", results); 
+            
+            match results.results::<Message>() {
+                Ok(messages) => Response::from_json(&messages),
+                Err(e) => {
+                    console_error!("Failed to deserialize messages: {:?}", e);
+                    Response::error("Internal Server Error: Data format issue", 500)
+                }
+            }
+        },
+        Err(e) => {
+            console_error!("D1 query failed for all messages: {:?}", e);
+            Response::error("Internal Server Error: Database query failed", 500)
+        }
+    }
+}
+
+async fn handle_get_by_id(ctx: RouteContext<()>) -> Result<Response> {
+    let id = match ctx.param("id") {
+        Some(s) => s.to_string(),
+        None => return Response::error("Bad Request: ID missing", 400),
+    };
+
+    let d1 = ctx.env.d1("DB")?;
+    let statement = d1.prepare("SELECT * FROM messages WHERE id = ?1");
+    
+    let query = statement.bind(&[id.into()])?;
+    
+    match query.first::<Message>(None).await? {
+        Some(message) => Response::from_json(&message),
+        None => Response::error("Message Not Found", 404),
+    }
+}
+
+async fn handle_set_message(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let message_body: Message = match req.json().await {
+        Ok(b) => b,
+        Err(e) => {
+            console_error!("Failed to parse request: {:?}", e);
+            return Response::error("Bad Request: Invalid JSON", 400);
+        }
+    };
+
+    console_debug!("Received: {:?}", message_body);
+
+    if message_body.sms.trim().is_empty() {
+        return Response::error("Bad Request: SMS content cannot be empty", 400);
+    }
+    
+    let d1 = ctx.env.d1("DB")?;
+    
+    let statement =
+        d1.prepare("INSERT INTO messages (sender, sms, ts) VALUES (?1, ?2, ?3)");
+
+    let query = statement.bind(&[
+        message_body.sender.clone().into(),
+        message_body.sms.clone().into(),
+        message_body.ts.clone().into(),
+    ])?;
+
+    match query.run().await {
+        Ok(result) if result.success() => {
+            console_log!("Message successfully stored.");
+            
+            // Send email asynchronously (non-blocking)
+            if let Err(e) = send_mail(message_body, &ctx).await {
+                console_error!("Failed to send email: {:?}", e);
+                // Don't fail the request if email fails
+            }
+            
+            Response::empty().map(|resp| resp.with_status(201)) 
+        }
+        Ok(_) => {
+            console_error!("D1 run failed");
+            Response::error("D1 operation failed", 500)
+        }
+        Err(e) => {
+            console_error!("D1 run failed with error: {:?}", e);
+            Response::error("Internal Server Error: Database insertion failed", 500)
+        }
+    }
+}
+
+async fn send_mail(msg: Message, ctx: &RouteContext<()>) -> Result<()> {
+    // Get environment variables
+    let api_key = ctx.env.secret("RESEND_API_KEY")?.to_string(); // 
+    let from_email = ctx.env.var("FROM_EMAIL")?.to_string(); // 
+    let to_email = ctx.env.var("TO_EMAIL")?.to_string();
+    console_log!("{} {} {}", api_key, from_email, to_email);
+    // Create HTML email body
+    let html_body = format!(
+        r#"
+        <html>
+            <body>
+                <h2>New SMS from Lghnay</h2>
+                <p><strong>Sender:</strong> {}</p>
+                <p><strong>Time:</strong> {}</p>
+                <p><strong>Message:</strong></p>
+                <p>{}</p>
+            </body>
+        </html>
+        "#,
+        msg.sender, msg.ts, msg.sms
+    );
+    
+    // Prepare the email payload
+    let payload = ResendEmailPayload {
+        from: from_email,
+        to: vec![to_email],
+        subject: "New SMS from Lghnay".to_string(),
+        html: html_body,
+    };
+    
+    // Create headers
+    let  headers = Headers::new();
+    headers.set("Authorization", &format!("Bearer {}", api_key))?;
+    headers.set("Content-Type", "application/json")?;
+    
+    // Create the request
+    let body = serde_json::to_string(&payload)
+        .map_err(|e| Error::RustError(format!("Serialization error: {}", e)))?;
+    
+    let req = Request::new_with_init(
+        "https://api.resend.com/emails",
+        RequestInit::new()
+            .with_method(Method::Post)
+            .with_headers(headers)
+            .with_body(Some(body.into())),
+    )?;
+    
+    // Send the request
+    let mut resp = Fetch::Request(req).send().await?;
+    
+    // Check response status
+    let status = resp.status_code();
+    if status < 200 || status >= 300 {
+        let error_text = resp.text().await?;
+        console_error!("Resend API error ({}): {}", resp.status_code(), error_text);
+        return Err(Error::RustError(format!(
+            "Resend API error ({}): {}",
+            resp.status_code(),
+            error_text
+        )));
+    }
+    
+    // Parse response
+    let resend_resp: Message = resp.json().await?;
+    console_log!("Email sent successfully! ID: {}", resend_resp.to_string());
+    
+    Ok(())
+}

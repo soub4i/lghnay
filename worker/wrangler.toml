@@ -1,0 +1,12 @@
+name = "lghnay"
+main = "build/index.js"
+compatibility_date = "2025-10-19"
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "DB"
+database_id = "e20a217c-5852-41eb-a8f8-570e1b599942"
+
