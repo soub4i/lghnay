@@ -3,10 +3,64 @@
 // Library Includes
 #include <Wire.h>
 #include <TinyGsmClient.h>
-#include <WiFi.h>
 #include <HTTPClient.h>
+#include <WiFiManager.h>
+#include "mbedtls/aes.h"
+#include "mbedtls/base64.h"
 
 TinyGsm modem(SerialAT);
+
+// PKCS7
+void addPadding(uint8_t* data, size_t dataLen, size_t* paddedLen) {
+  size_t padding = 16 - (dataLen % 16);
+  *paddedLen = dataLen + padding;
+  for (size_t i = dataLen; i < *paddedLen; i++) {
+    data[i] = padding;
+  }
+}
+
+String encryptMessage(String message) {
+  // Prepare input
+  size_t msgLen = message.length();
+  size_t paddedLen;
+  uint8_t plaintext[256];
+  
+  message.getBytes(plaintext, msgLen + 1);
+  addPadding(plaintext, msgLen, &paddedLen);
+  
+  // Prepare output buffer
+  uint8_t ciphertext[256];
+  
+  // Generate random IV (16 bytes for AES)
+  uint8_t iv[16];
+  for (int i = 0; i < 16; i++) {
+    iv[i] = random(0, 256);
+  }
+  
+  // Initialize AES context
+  mbedtls_aes_context aes;
+  mbedtls_aes_init(&aes);
+  mbedtls_aes_setkey_enc(&aes, (const unsigned char*)encryptionKey, 256);
+  
+  // Encrypt using CBC mode
+  uint8_t iv_copy[16];
+  memcpy(iv_copy, iv, 16);  // CBC mode modifies IV, so we need a copy
+  mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_ENCRYPT, paddedLen, iv_copy, plaintext, ciphertext);
+  
+  mbedtls_aes_free(&aes);
+  
+  // Combine IV + Ciphertext
+  uint8_t combined[272]; // 16 (IV) + 256 (max ciphertext)
+  memcpy(combined, iv, 16);
+  memcpy(combined + 16, ciphertext, paddedLen);
+  
+  // Base64 encode
+  size_t outputLen;
+  uint8_t base64Output[400];
+  mbedtls_base64_encode(base64Output, sizeof(base64Output), &outputLen, combined, 16 + paddedLen);
+  
+  return String((char*)base64Output);
+}
 
 bool setPowerBoostKeepOn(int en) {
   Wire.beginTransmission(IP5306_ADDR);
@@ -22,46 +76,35 @@ bool setPowerBoostKeepOn(int en) {
 // Connects the ESP32 to the configured WiFi network.
 bool connectToWiFi() {
   SerialMon.print("Connecting to WiFi");
-  // The variables 'ssid' and 'password' are defined in config.h
-  WiFi.begin(ssid, password);
-  
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-    delay(500);
-    SerialMon.print(".");
-    attempts++;
-  }
-  
-  if (WiFi.status() == WL_CONNECTED) {
-    SerialMon.println("\nWiFi connected!");
-    SerialMon.print("IP address: ");
-    SerialMon.println(WiFi.localIP());
-    return true;
-  } else {
-    SerialMon.println("\nWiFi connection failed!");
-    return false;
-  }
+  WiFi.mode(WIFI_STA);
+
+  WiFiManager wm;
+  bool res;
+
+  res = wm.autoConnect(AP_name,AP_password);
+  if(!res) {
+        Serial.println("Failed to connect");
+        ESP.restart();
+  } 
+  else {
+        Serial.println("connected.");
+  }  
+
 }
 
 // Sends the received SMS data to the configured server endpoint via HTTP POST.
-bool sendSMSToServer(String phoneNumber, String message, String timestamp) {
-  if (WiFi.status() != WL_CONNECTED) {
-    SerialMon.println("WiFi not connected, attempting to reconnect...");
-    if (!connectToWiFi()) {
-      return false;
-    }
-  }
-  
+bool sendSMSToServer(String phoneNumber, String message, String timestamp) {  
+  SerialMon.println("Posting to URL: " + String(serverURL));
   HTTPClient http;
   
-  SerialMon.println("Posting to URL: " + String(serverURL));
-  
+  SerialMon.println("Encrypting message...");
+  String encryptedMessage = encryptMessage(message);
 
   http.begin(serverURL);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("Authorization", String("Cisab ") + apikey); // 'apikey' is defined in config.h
   
-  String jsonPayload = "{\"sender\":\"" + phoneNumber + "\",\"sms\":\"" + message + "\",\"ts\":\"" + timestamp + "\"}";
+  String jsonPayload = "{\"sender\":\"" + phoneNumber + "\",\"sms\":\"" + encryptedMessage + "\",\"ts\":\"" + timestamp + "\"}";
 
   int httpResponseCode = http.POST(jsonPayload);
   
@@ -148,17 +191,7 @@ void setup() {
 
 String currentLine = "";
 
-void loop() {
-  // Check WiFi status periodically
-  static unsigned long lastWiFiCheck = 0;
-  if (millis() - lastWiFiCheck > 30000) { 
-    if (WiFi.status() != WL_CONNECTED) {
-      SerialMon.println("WiFi disconnected, reconnecting...");
-      connectToWiFi();
-    }
-    lastWiFiCheck = millis();
-  }
-  
+void loop() {  
   // Process incoming data from the modem
   while (SerialAT.available()) {
     char c = SerialAT.read();

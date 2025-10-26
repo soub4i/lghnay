@@ -38,6 +38,16 @@ func (r *Repository) GetMessages() *[]Message {
 		logger.Printf("error unmarshell body; %v", err)
 		return nil
 	}
+
+	for i, m := range msg {
+		dec, err := DecryptMessage(m.SMS, store["ENCRYPTION_KEY"])
+		if err != nil {
+			logger.Printf("error decrypting message; %v", err)
+			continue
+		}
+		msg[i].SMS = dec
+	}
+
 	return &msg
 
 }

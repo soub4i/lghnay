@@ -10,8 +10,9 @@ import (
 func NewRepository() *Repository {
 
 	store := map[string]string{
-		"URL":   os.Getenv("API_URL"),
-		"TOKEN": os.Getenv("TOKEN"),
+		"URL":            os.Getenv("API_URL"),
+		"TOKEN":          os.Getenv("TOKEN"),
+		"ENCRYPTION_KEY": os.Getenv("ENCRYPTION_KEY"),
 	}
 	ctx := context.WithValue(context.Background(), "store", store)
 	client := createClient()

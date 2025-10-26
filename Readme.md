@@ -35,7 +35,8 @@ The project consists of three interconnected components:
 
 ### Firmware
 - ⚡ Power management with IP5306 boost control
-- 📡 Dual connectivity (WiFi + GSM/GPRS)
+- 📡 Dual connectivity (GSM/GPRS + WiFi with captive portal)
+- 🔐 AES-256-CBC encryption for SMS content
 - 📨 Real-time SMS reception and parsing
 - 🔒 Secure HTTPS data transmission
 - 🔄 Automatic reconnection handling
@@ -52,6 +53,32 @@ The project consists of three interconnected components:
 - 🔐 Secure API authentication
 - 📋 Message listing and viewing
 - 🎨 Easy-to-use command-line interface
+
+## 🔐 Security Features
+
+### End-to-End Encryption
+
+SMS messages are encrypted on the device before transmission using **AES-256-CBC** encryption:
+
+1. **Device Side**: Each message is encrypted with a 256-bit key before being sent to the server
+2. **Random IV**: A new initialization vector is generated for each message
+3. **Base64 Encoding**: Encrypted data is Base64-encoded for safe JSON transmission
+4. **HTTPS Transport**: All data travels over HTTPS for transport layer security
+
+### Encryption Flow
+
+```
+Plain SMS → AES-256-CBC Encrypt → Base64 Encode → HTTPS POST → Server
+```
+
+The worker must decrypt the messages using the same AES key. This ensures that even if someone intercepts the HTTPS traffic or gains access to your Cloudflare account, they cannot read the SMS content without the encryption key.
+
+### WiFi Configuration Security
+
+- Uses WiFiManager with captive portal for initial setup
+- No hardcoded WiFi credentials in the firmware
+- Credentials stored securely in ESP32's flash memory
+- Access point password protects the configuration interface
 
 
 ![](./screenshots/tui.png)
@@ -113,9 +140,9 @@ Create a `config.h` file in your firmware directory:
 #define I2C_SDA 21
 #define I2C_SCL 22
 
-// WiFi Credentials
-const char* ssid = "Your_WiFi_SSID";
-const char* password = "Your_WiFi_Password";
+// WiFi Manager Configuration
+const char* AP_name = "TTGO-SMS-Gateway";
+const char* AP_password = "12345678";  // Access point password (min 8 chars)
 
 // Server Configuration
 const char* serverURL = "https://your-worker-url/set";
@@ -125,17 +152,17 @@ const char* simPIN = ""; // Leave empty if no PIN required
 
 ### Upload
 
-1. Connect your TTGO T-Call via USB
+1. Connect your TTGO T-Call ESP32 via USB
 2. Select **ESP32 Dev Module** as your board
 3. Set upload speed to **115200**
 4. Upload the firmware
-
-### Serial Monitor output
-
-```log
-
-
-```
+5. **First Boot Setup**:
+   - The device creates a WiFi access point: `Elghnay_AP`
+   - Connect to it using password: `12345678` (or your configured AP password)
+   - A captive portal appears automatically (or navigate to `192.168.4.1`)
+   - Select your WiFi network and enter the password
+   - Click Save - the device will reboot and connect to your WiFi
+6. Monitor the Serial output to verify SMS reception and forwarding
 
 
 ---
