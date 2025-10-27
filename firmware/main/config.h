@@ -12,15 +12,12 @@ const char simPIN[] = "0000";  // CHANGE This
 const char* AP_name = "Elghnay_AP";
 const char* AP_password = "12345678"; //min 8 charachters
 
-// Key must be exactly 32 characters for AES-256 encryption
-// use this to generate your key : openssl rand -hex 32 
-const char* encryptionKey = ""; // change This
 
 // API KEY that will be used to authenticate with the server. it should match the one configured on Cloudflare .
 const char* apikey = ""; // CHANGE This
 
 // Your server details
-const char* serverURL = "https://<projectname>.<username>.workers.dev/set";  // CHANGE This
+const char* serverURL = "https://<projectname>.<username>.workers.dev/set"; 
 
 
 // ------------------------------------

@@ -36,12 +36,12 @@ The project consists of three interconnected components:
 ### Firmware
 - ⚡ Power management with IP5306 boost control
 - 📡 Dual connectivity (GSM/GPRS + WiFi with captive portal)
-- 🔐 AES-256-CBC encryption for SMS content
 - 📨 Real-time SMS reception and parsing
 - 🔒 Secure HTTPS data transmission
 - 🔄 Automatic reconnection handling
 
 ### Worker API
+- 🔐 AES-256-CBC encryption for SMS content
 - 🛡️ Custom "Cisab" authentication scheme
 - 💾 Cloudflare D1 database integration
 - 📧 Email notifications via Resend API
@@ -54,16 +54,7 @@ The project consists of three interconnected components:
 - 📋 Message listing and viewing
 - 🎨 Easy-to-use command-line interface
 
-## 🔐 Security Features
 
-### End-to-End Encryption
-
-SMS messages are encrypted on the device before transmission using **AES-256-CBC** encryption:
-
-1. **Device Side**: Each message is encrypted with a 256-bit key before being sent to the server
-2. **Random IV**: A new initialization vector is generated for each message
-3. **Base64 Encoding**: Encrypted data is Base64-encoded for safe JSON transmission
-4. **HTTPS Transport**: All data travels over HTTPS for transport layer security
 
 ### Encryption Flow
 
@@ -186,6 +177,7 @@ Configure the following in your Cloudflare Worker dashboard:
 | `DB` | D1 Binding | D1 Database binding name |
 | `FROM_EMAIL` | Variable | Sender email address |
 | `TO_EMAIL` | Variable | Recipient email address for notifications |
+| `ENCRYPTION_KEY` | Secret | Encryption KEY that will be used to encrypt SMS before saving it in DB |
 
 ### Database Setup
 
