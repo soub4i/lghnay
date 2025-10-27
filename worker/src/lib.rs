@@ -3,16 +3,13 @@ use std::fmt;
 use worker::*;
 
 use aes::Aes256;
-use cbc::{Encryptor, Decryptor};
-use cbc::cipher::{BlockEncryptMut, BlockDecryptMut, KeyIvInit};
+use base64::{engine::general_purpose, Engine as _};
+use cbc::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use cbc::{Decryptor, Encryptor};
 use getrandom::getrandom;
-use base64::{Engine as _, engine::general_purpose};
 
 type Aes256CbcEnc = Encryptor<Aes256>;
 type Aes256CbcDec = Decryptor<Aes256>;
-
-
-
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 struct Message {
@@ -39,7 +36,6 @@ struct ResendEmailPayload {
     subject: String,
     html: String,
 }
-
 
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
@@ -148,7 +144,8 @@ async fn handle_set_message(mut req: Request, ctx: RouteContext<()>) -> Result<R
     };
 
     console_debug!("Received: {:?}", message_body);
-
+    // save copy of original message for email
+    let original_message = message_body.clone().sms;
     if message_body.sms.trim().is_empty() {
         return Response::error("Bad Request: SMS content cannot be empty", 400);
     }
@@ -173,7 +170,7 @@ async fn handle_set_message(mut req: Request, ctx: RouteContext<()>) -> Result<R
     match query.run().await {
         Ok(result) if result.success() => {
             console_log!("Message successfully stored.");
-
+            message_body.sms = original_message; // restore original message for email
             if let Err(e) = send_mail(message_body, &ctx).await {
                 console_error!("Failed to send email: {:?}", e);
             }
@@ -260,51 +257,56 @@ async fn send_mail(msg: Message, ctx: &RouteContext<()>) -> Result<()> {
     Ok(())
 }
 
-
-
-pub fn encrypt_message(message: &str, encryption_key: &str) -> std::result::Result<String, Box<dyn std::error::Error>> {
+pub fn encrypt_message(
+    message: &str,
+    encryption_key: &str,
+) -> std::result::Result<String, Box<dyn std::error::Error>> {
     let key = encryption_key.as_bytes();
-    
+
     let mut iv = [0u8; 16];
-    getrandom(&mut iv).map_err(|e| format!("Random generation error: {:?}", e))?;    
+    getrandom(&mut iv).map_err(|e| format!("Random generation error: {:?}", e))?;
     let mut buffer = message.as_bytes().to_vec();
     let padding = 16 - (buffer.len() % 16);
     buffer.extend(vec![padding as u8; padding]);
-    
+
     let cipher = Aes256CbcEnc::new(key.into(), &iv.into());
-    let ciphertext = cipher.encrypt_padded_b2b_mut::<cbc::cipher::block_padding::Pkcs7>(
-        message.as_bytes(),
-        &mut buffer
-    ).map_err(|e| format!("Encryption error: {:?}", e))?;
-    
+    let ciphertext = cipher
+        .encrypt_padded_b2b_mut::<cbc::cipher::block_padding::Pkcs7>(
+            message.as_bytes(),
+            &mut buffer,
+        )
+        .map_err(|e| format!("Encryption error: {:?}", e))?;
+
     let mut combined = Vec::with_capacity(16 + ciphertext.len());
     combined.extend_from_slice(&iv);
     combined.extend_from_slice(ciphertext);
-    
+
     let encoded = general_purpose::STANDARD.encode(&combined);
-    
+
     Ok(encoded)
 }
 
-
-
-pub fn decrypt_message(encrypted_message: &str, encryption_key: &str) -> std::result::Result<String, Box<dyn std::error::Error>> {
+pub fn decrypt_message(
+    encrypted_message: &str,
+    encryption_key: &str,
+) -> std::result::Result<String, Box<dyn std::error::Error>> {
     let decoded = general_purpose::STANDARD.decode(encrypted_message)?;
-    
+
     if decoded.len() < 16 {
         return Err("Invalid ciphertext length".into());
     }
-    
+
     let (iv, ciphertext) = decoded.split_at(16);
     let mut buffer = ciphertext.to_vec();
-    
+
     let key = encryption_key.as_bytes();
     let cipher = Aes256CbcDec::new(key.into(), iv.into());
-    
-    let decrypted = cipher.decrypt_padded_mut::<cbc::cipher::block_padding::Pkcs7>(&mut buffer)
+
+    let decrypted = cipher
+        .decrypt_padded_mut::<cbc::cipher::block_padding::Pkcs7>(&mut buffer)
         .map_err(|e| format!("Decryption error: {:?}", e))?;
-    
+
     let plaintext = String::from_utf8(decrypted.to_vec())?;
-    
+
     Ok(plaintext)
 }

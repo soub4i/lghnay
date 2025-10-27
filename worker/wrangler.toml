@@ -10,3 +10,6 @@ binding = "DB"
 database_name = "DB"
 database_id = "e20a217c-5852-41eb-a8f8-570e1b599942"
 
+[vars]
+FROM_EMAIL = "Acme <onboarding@resend.dev>"
+TO_EMAIL = ""

@@ -137,23 +137,24 @@ void loop() {
       
       if (currentLine.startsWith("+CMT:")) {
         SerialMon.println("\n=== NEW SMS ===");
-        
-        int fQuote = currentLine.indexOf('"');
-        int sdQuote = currentLine.indexOf('"', fQuote + 1);
-        int fifQuote = currentLine.indexOf('"', sdQuote + 1);
-        int sxthQuote = currentLine.indexOf('"', fifQuote + 1);
-        
+        int firstQuote = currentLine.indexOf('"');
+        int secondQuote = currentLine.indexOf('"', firstQuote + 1);
+        int thirdQuote = currentLine.indexOf('"', secondQuote + 1);
+        int fourthQuote = currentLine.indexOf('"', thirdQuote + 1);
+        int fifthQuote = currentLine.indexOf('"', fourthQuote + 1);
+        int sixthQuote = currentLine.indexOf('"', fifthQuote + 1);
+
         String sender = "";
         String timestamp = "";
-        
-        if (fQuote != -1 && sdQuote != -1) {
-          sender = currentLine.substring(fQuote + 1, sdQuote);
+
+        if (firstQuote != -1 && secondQuote != -1) {
+          sender = currentLine.substring(firstQuote + 1, secondQuote);
         }
-        
-        if (fifQuote != -1 && sxthQuote != -1) {
-          timestamp = currentLine.substring(fifQuote + 1, sxthQuote);
+
+        if (fifthQuote != -1 && sixthQuote != -1) {
+          timestamp = currentLine.substring(fifthQuote + 1, sixthQuote);
         }
-        
+
         sender.trim();
         timestamp.trim();
         
