@@ -94,6 +94,14 @@ async fn handle_get_all(ctx: RouteContext<()>) -> Result<Response> {
                                 // message.sms = "[Decryption failed]".to_string();
                             }
                         }
+                        if message.sms.len() > 0
+                            && message.sms.chars().all(|c| c.is_ascii_hexdigit())
+                        {
+                            match decode_utf16_hex(&message.sms) {
+                                Ok(decoded) => message.sms = decoded,
+                                Err(e) => console_error!("Failed to decode UTF-16: {:?}", e),
+                            }
+                        }
                     }
                     Response::from_json(&messages)
                 }
@@ -128,6 +136,14 @@ async fn handle_get_by_id(ctx: RouteContext<()>) -> Result<Response> {
                 console_error!("Encryption failed: {:?}", e);
                 worker::Error::from("Encryption failed")
             })?;
+
+            if message.sms.len() > 0 && message.sms.chars().all(|c| c.is_ascii_hexdigit()) {
+                match decode_utf16_hex(&message.sms) {
+                    Ok(decoded) => message.sms = decoded,
+                    Err(e) => console_error!("Failed to decode UTF-16: {:?}", e),
+                }
+            }
+
             Response::from_json(&message)
         }
         None => Response::error("Message Not Found", 404),
@@ -142,6 +158,13 @@ async fn handle_set_message(mut req: Request, ctx: RouteContext<()>) -> Result<R
             return Response::error("Bad Request: Invalid JSON", 400);
         }
     };
+
+    if message_body.sms.len() > 0 && message_body.sms.chars().all(|c| c.is_ascii_hexdigit()) {
+        match decode_utf16_hex(&message_body.sms) {
+            Ok(decoded) => message_body.sms = decoded,
+            Err(e) => console_error!("Failed to decode UTF-16: {:?}", e),
+        }
+    }
 
     console_debug!("Received: {:?}", message_body);
     // save copy of original message for email
@@ -309,4 +332,22 @@ pub fn decrypt_message(
     let plaintext = String::from_utf8(decrypted.to_vec())?;
 
     Ok(plaintext)
+}
+
+fn decode_utf16_hex(hex_str: &str) -> std::result::Result<String, String> {
+    let hex_str = hex_str.trim();
+
+    let mut bytes = Vec::new();
+    for i in (0..hex_str.len()).step_by(2) {
+        let byte = u8::from_str_radix(&hex_str[i..i + 2], 16)
+            .map_err(|e| format!("Hex decode error: {}", e))?;
+        bytes.push(byte);
+    }
+
+    let utf16: Vec<u16> = bytes
+        .chunks_exact(2)
+        .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+        .collect();
+
+    String::from_utf16(&utf16).map_err(|e| format!("UTF-16 decode error: {:?}", e))
 }

@@ -109,14 +109,17 @@ void setup() {
     SerialMon.println(signalQuality);
   }
   
-  SerialAT.println("AT");
-  delay(1000);
-  
-  SerialAT.println("AT+CMGF=1");
-  delay(1000);
-  
-  SerialAT.println("AT+CNMI=2,2,0,0,0");
-  delay(1000);
+ SerialAT.println("AT");
+ delay(1000);
+
+ SerialAT.println("AT+CMGF=1");
+ delay(1000);
+
+ SerialAT.println("AT+CSCS=\"UCS2\"");
+ delay(1000);
+
+SerialAT.println("AT+CNMI=2,2,0,0,0");
+delay(1000);
   
   SerialMon.println("\n=== System Ready ===");
   SerialMon.print("WiFi: ");
