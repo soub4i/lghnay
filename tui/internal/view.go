@@ -86,12 +86,41 @@ func (a *App) Refresh() {
 		for i, item := range *a.elemets {
 			a.elemetsView.AddItem(fmt.Sprintf("[%d] %s - %s (SMS: %s)\n", i+1, item.Sender, item.TS, truncateText(item.SMS, 10)), "", rune(i+1), func() {
 				a.currentElemetView.Clear()
-				fmt.Fprintf(a.currentElemetView, "[%s] %s - %s\n", item.TS, item.Sender, item.SMS)
+				// check if item.SMS is RTL
+				if isRTL(item.SMS) {
+					a.currentElemetView.SetTextAlign(tview.AlignRight)
+				} else {
+					a.currentElemetView.SetTextAlign(tview.AlignLeft)
+				}
+
+				fmt.Fprintf(a.currentElemetView, "[%s] %s\n\n%s", item.TS, item.Sender, item.SMS)
 			})
 		}
 	}
 }
 
-func truncateText(s string, max int) string {
-	return fmt.Sprintf("%s...", s[:max])
+func truncateText(text string, maxLen int) string {
+	runes := []rune(text)
+	if len(runes) <= maxLen {
+		return formatText(text)
+	}
+	return formatText(string(runes[:maxLen]) + "...")
+}
+
+func formatText(text string) string {
+	if isRTL(text) {
+		return "\u200F" + text
+	}
+	return text
+}
+func isRTL(text string) bool {
+	for _, r := range text {
+		if r >= 0x0600 && r <= 0x06FF {
+			return true
+		}
+		if r >= 0x0590 && r <= 0x05FF {
+			return true
+		}
+	}
+	return false
 }

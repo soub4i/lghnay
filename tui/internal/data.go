@@ -6,7 +6,7 @@ import (
 )
 
 type Message struct {
-	ID     int
+	ID     string
 	Sender string
 	SMS    string
 	TS     string
