@@ -13,10 +13,14 @@ type Aes256CbcDec = Decryptor<Aes256>;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 struct Message {
-    id: Option<u32>,
+    id: Option<std::string::String>,
     sender: String,
     sms: String,
     ts: String,
+}
+#[derive(Debug, Deserialize)]
+struct ResendResponse {
+    id: String,
 }
 
 impl fmt::Display for Message {
@@ -70,31 +74,47 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .await
 }
 
+
 async fn handle_get_all(ctx: RouteContext<()>) -> Result<Response> {
     let d1 = ctx.env.d1("DB")?;
-    let statement = d1.prepare("SELECT * FROM messages ORDER BY id DESC");
-
     let encryption_key = ctx.env.var("ENCRYPTION_KEY")?.to_string();
+
+    // Force all columns to TEXT to avoid Serde type mismatches
+    let statement = d1.prepare(
+        "SELECT
+            CAST(id AS TEXT) AS id,
+            CAST(sender AS TEXT) AS sender,
+            CAST(sms AS TEXT) AS sms,
+            CAST(ts AS TEXT) AS ts
+        FROM messages
+        ORDER BY CAST(id AS INTEGER) DESC"
+    );
 
     match statement.all().await {
         Ok(results) => {
             console_debug!("Raw D1 Result: {:?}", results);
+
             match results.results::<Message>() {
                 Ok(mut messages) => {
-                    // Decrypt each message
                     for message in messages.iter_mut() {
-                        match decrypt_message(&message.sms, &encryption_key) {
-                            Ok(decrypted) => message.sms = decrypted,
-                            Err(e) => {
-                                console_error!(
-                                    "Failed to decrypt message {:?}: {:?}",
-                                    message.id,
-                                    e
-                                );
-                                // message.sms = "[Decryption failed]".to_string();
+                        
+                        // Decrypt if needed
+                        if is_base64(&message.sms) && message.sms.len() > 20 {
+                            match decrypt_message(&message.sms, &encryption_key) {
+                                Ok(decrypted) => message.sms = decrypted,
+                                Err(e) => {
+                                    console_error!(
+                                        "Failed to decrypt message {:?}: {:?}",
+                                        message.id,
+                                        e
+                                    );
+                                }
                             }
                         }
-                        if message.sms.len() > 0
+
+                        // UTF-16 Hex decode if needed
+                        if message.sms.len() >= 4
+                            && message.sms.len() % 2 == 0
                             && message.sms.chars().all(|c| c.is_ascii_hexdigit())
                         {
                             match decode_utf16_hex(&message.sms) {
@@ -103,14 +123,17 @@ async fn handle_get_all(ctx: RouteContext<()>) -> Result<Response> {
                             }
                         }
                     }
+
                     Response::from_json(&messages)
                 }
+
                 Err(e) => {
                     console_error!("Failed to deserialize messages: {:?}", e);
                     Response::error("Internal Server Error: Data format issue", 500)
                 }
             }
         }
+
         Err(e) => {
             console_error!("D1 query failed for all messages: {:?}", e);
             Response::error("Internal Server Error: Database query failed", 500)
@@ -118,32 +141,42 @@ async fn handle_get_all(ctx: RouteContext<()>) -> Result<Response> {
     }
 }
 
+
 async fn handle_get_by_id(ctx: RouteContext<()>) -> Result<Response> {
     let id = match ctx.param("id") {
         Some(s) => s.to_string(),
         None => return Response::error("Bad Request: ID missing", 400),
     };
+    
     let encryption_key = ctx.env.var("ENCRYPTION_KEY")?.to_string();
-
     let d1 = ctx.env.d1("DB")?;
     let statement = d1.prepare("SELECT * FROM messages WHERE id = ?1");
-
     let query = statement.bind(&[id.into()])?;
-
+    
     match query.first::<Message>(None).await? {
         Some(mut message) => {
-            message.sms = decrypt_message(&message.sms, &encryption_key).map_err(|e| {
-                console_error!("Encryption failed: {:?}", e);
-                worker::Error::from("Encryption failed")
-            })?;
-
-            if message.sms.len() > 0 && message.sms.chars().all(|c| c.is_ascii_hexdigit()) {
+            // Try to decrypt only if it looks like base64 (encrypted)
+            if is_base64(&message.sms) && message.sms.len() > 20 {
+                match decrypt_message(&message.sms, &encryption_key) {
+                    Ok(decrypted) => message.sms = decrypted,
+                    Err(e) => {
+                        console_error!("Failed to decrypt message: {:?}", e);
+                        // Keep original message if decryption fails
+                    }
+                }
+            }
+            
+            // Check if message is UTF-16 hex encoded
+            if message.sms.len() >= 4
+                && message.sms.len() % 2 == 0
+                && message.sms.chars().all(|c| c.is_ascii_hexdigit())
+            {
                 match decode_utf16_hex(&message.sms) {
                     Ok(decoded) => message.sms = decoded,
                     Err(e) => console_error!("Failed to decode UTF-16: {:?}", e),
                 }
             }
-
+            
             Response::from_json(&message)
         }
         None => Response::error("Message Not Found", 404),
@@ -171,6 +204,26 @@ async fn handle_set_message(mut req: Request, ctx: RouteContext<()>) -> Result<R
     let original_message = message_body.clone().sms;
     if message_body.sms.trim().is_empty() {
         return Response::error("Bad Request: SMS content cannot be empty", 400);
+    }
+
+    if message_body.sms.len() >= 4
+        && message_body.sms.len() % 2 == 0
+        && message_body.sms.chars().all(|c| c.is_ascii_hexdigit())
+    {
+        match decode_utf16_hex(&message_body.sms) {
+            Ok(decoded) => message_body.sms = decoded,
+            Err(e) => console_error!("Failed to decode SMS UTF-16: {:?}", e),
+        }
+    }
+
+    if message_body.sender.len() >= 4
+        && message_body.sender.len() % 2 == 0
+        && message_body.sender.chars().all(|c| c.is_ascii_hexdigit())
+    {
+        match decode_utf16_hex(&message_body.sender) {
+            Ok(decoded) => message_body.sender = decoded,
+            Err(e) => console_error!("Failed to decode sender UTF-16: {:?}", e),
+        }
     }
 
     let encryption_key = ctx.env.var("ENCRYPTION_KEY")?.to_string();
@@ -274,8 +327,8 @@ async fn send_mail(msg: Message, ctx: &RouteContext<()>) -> Result<()> {
     }
 
     // Parse response
-    let resend_resp: Message = resp.json().await?;
-    console_log!("Email sent successfully! ID: {}", resend_resp.to_string());
+    let resend_resp: ResendResponse = resp.json().await?;
+    console_log!("Email sent successfully! ID: {}", resend_resp.id);
 
     Ok(())
 }
@@ -337,11 +390,22 @@ pub fn decrypt_message(
 fn decode_utf16_hex(hex_str: &str) -> std::result::Result<String, String> {
     let hex_str = hex_str.trim();
 
+    if hex_str.len() % 2 != 0 {
+        return Err("Hex string must have even length".to_string());
+    }
+
     let mut bytes = Vec::new();
     for i in (0..hex_str.len()).step_by(2) {
+        if i + 2 > hex_str.len() {
+            break;
+        }
         let byte = u8::from_str_radix(&hex_str[i..i + 2], 16)
             .map_err(|e| format!("Hex decode error: {}", e))?;
         bytes.push(byte);
+    }
+
+    if bytes.len() % 2 != 0 {
+        return Err("Invalid UTF-16: odd number of bytes".to_string());
     }
 
     let utf16: Vec<u16> = bytes
@@ -350,4 +414,8 @@ fn decode_utf16_hex(hex_str: &str) -> std::result::Result<String, String> {
         .collect();
 
     String::from_utf16(&utf16).map_err(|e| format!("UTF-16 decode error: {:?}", e))
+}
+
+fn is_base64(s: &str) -> bool {
+    s.chars().all(|c| c.is_alphanumeric() || c == '+' || c == '/' || c == '=')
 }
